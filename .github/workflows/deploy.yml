@@ -9,13 +9,56 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
 jobs:
   deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/configure-pages@v4
-    - uses: actions/upload-pages-artifact@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js (for dependencies validation)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Validate package.json
+      run: |
+        if [ -f package.json ]; then
+          echo "✅ Package.json found - validating structure"
+          node -e "console.log('📦 Dependencies:', Object.keys(JSON.parse(require('fs').readFileSync('package.json')).dependencies || {}).length)"
+        else
+          echo "⚠️ No package.json found - deploying static files only"
+        fi
+        
+    - name: Prepare static deployment
+      run: |
+        echo "📁 Preparing static files for GitHub Pages..."
+        ls -la
+        echo "✅ Portfolio Fund Manager ready for deployment!"
+        
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+      
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
       with:
         path: '.'
-    - uses: actions/deploy-pages@v4
+        
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+      
+    - name: Deployment success
+      run: |
+        echo "🚀 Portfolio Dashboard deployed successfully!"
+        echo "📊 Live URL: ${{ steps.deployment.outputs.page_url }}"
+        echo "🔧 Fund Management: Add/Pause/Delete funds available"
+        echo "📈 Day/Week changes: Live tracking enabled"
