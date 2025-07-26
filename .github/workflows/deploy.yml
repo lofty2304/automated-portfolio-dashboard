@@ -3,49 +3,19 @@ name: Deploy Portfolio Dashboard
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Static site ready
-      run: |
-        echo "📁 Preparing static files for deployment..."
-        ls -la
-        echo "✅ Static portfolio dashboard ready!"
-      
-    - name: Setup Pages
-      uses: actions/configure-pages@v4
-      
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v3
+    - uses: actions/checkout@v4
+    - uses: actions/configure-pages@v4
+    - uses: actions/upload-pages-artifact@v3
       with:
         path: '.'
-        
-    - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
-      
-    - name: Post deployment notification
-      run: |
-        echo "🚀 Portfolio Dashboard deployed successfully!"
-        echo "📊 Live URL: ${{ steps.deployment.outputs.page_url }}"
-        echo "📅 Deployed at: $(date)"
+    - uses: actions/deploy-pages@v4
