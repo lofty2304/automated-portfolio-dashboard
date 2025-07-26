@@ -1,0 +1,331 @@
+const express = require('express');
+const cors = require('cors');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
+// Database setup
+const db = new sqlite3.Database('portfolio.db');
+
+// Initialize database tables
+db.serialize(() => {
+    // Portfolio funds table with day/week NAV history
+    db.run(`CREATE TABLE IF NOT EXISTS portfolio_funds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fund_code TEXT UNIQUE NOT NULL,
+        fund_name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        current_nav REAL NOT NULL,
+        units REAL NOT NULL,
+        invested_value REAL NOT NULL,
+        current_value REAL NOT NULL,
+        allocation REAL DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        sip_amount REAL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // NAV history table for day/week change calculations
+    db.run(`CREATE TABLE IF NOT EXISTS nav_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fund_code TEXT NOT NULL,
+        nav REAL NOT NULL,
+        nav_date DATE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (fund_code) REFERENCES portfolio_funds (fund_code)
+    )`);
+
+    // Create index for faster queries
+    db.run(`CREATE INDEX IF NOT EXISTS idx_nav_history_fund_date ON nav_history (fund_code, nav_date)`);
+});
+
+// API Routes
+
+// Get all portfolio funds with day/week changes
+app.get('/api/portfolio/funds', (req, res) => {
+    const query = `
+        SELECT 
+            pf.*,
+            prev_day.nav as previous_nav,
+            prev_week.nav as week_ago_nav
+        FROM portfolio_funds pf
+        LEFT JOIN nav_history prev_day ON pf.fund_code = prev_day.fund_code 
+            AND prev_day.nav_date = date('now', '-1 day')
+        LEFT JOIN nav_history prev_week ON pf.fund_code = prev_week.fund_code 
+            AND prev_week.nav_date = date('now', '-7 days')
+        WHERE pf.status != 'deleted'
+        ORDER BY pf.allocation DESC
+    `;
+    
+    db.all(query, [], (err, rows) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+        
+        // Calculate day and week changes
+        const fundsWithChanges = rows.map(fund => ({
+            ...fund,
+            dayChange: fund.previous_nav ? 
+                ((fund.current_nav - fund.previous_nav) / fund.previous_nav * 100) : 0,
+            weekChange: fund.week_ago_nav ? 
+                ((fund.current_nav - fund.week_ago_nav) / fund.week_ago_nav * 100) : 0
+        }));
+        
+        res.json({ success: true, data: fundsWithChanges });
+    });
+});
+
+// Add new mutual fund
+app.post('/api/portfolio/funds', (req, res) => {
+    const { fund_code, fund_name, category, current_nav, invested_value, sip_amount } = req.body;
+    
+    if (!fund_code || !fund_name || !category || !current_nav || !invested_value) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Missing required fields' 
+        });
+    }
+    
+    const units = invested_value / current_nav;
+    const current_value = units * current_nav;
+    
+    const insertQuery = `
+        INSERT INTO portfolio_funds 
+        (fund_code, fund_name, category, current_nav, units, invested_value, current_value, sip_amount)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    
+    db.run(insertQuery, [fund_code, fund_name, category, current_nav, units, invested_value, current_value, sip_amount || 0], function(err) {
+        if (err) {
+            if (err.code === 'SQLITE_CONSTRAINT') {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Fund with this code already exists' 
+                });
+            }
+            console.error(err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+        
+        // Add initial NAV history entry
+        const historyInsert = `INSERT INTO nav_history (fund_code, nav, nav_date) VALUES (?, ?, date('now'))`;
+        db.run(historyInsert, [fund_code, current_nav]);
+        
+        // Recalculate allocations
+        recalculateAllocations();
+        
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+// Update fund status (pause/resume)
+app.patch('/api/portfolio/funds/:fund_code/status', (req, res) => {
+    const { fund_code } = req.params;
+    const { status } = req.body;
+    
+    if (!['active', 'paused'].includes(status)) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid status. Use "active" or "paused"' 
+        });
+    }
+    
+    const updateQuery = `
+        UPDATE portfolio_funds 
+        SET status = ?, updated_at = CURRENT_TIMESTAMP 
+        WHERE fund_code = ?
+    `;
+    
+    db.run(updateQuery, [status, fund_code], function(err) {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ success: false, message: 'Database error' });
+        }
+        
+        if (this.changes === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Fund not found' 
+            });
+        }
+        
+        res.json({ success: true });
+    });
+});
+
+// Delete fund
+app.delete('/api/portfolio/funds/:fund_code', (req, res) => {
+    const { fund_code } = req.params;
+    
+    db.serialize(() => {
+        // Delete NAV history first
+        db.run(`DELETE FROM nav_history WHERE fund_code = ?`, [fund_code]);
+        
+        // Delete fund
+        db.run(`DELETE FROM portfolio_funds WHERE fund_code = ?`, [fund_code], function(err) {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ success: false, message: 'Database error' });
+            }
+            
+            if (this.changes === 0) {
+                return res.status(404).json({ 
+                    success: false, 
+                    message: 'Fund not found' 
+                });
+            }
+            
+            // Recalculate allocations
+            recalculateAllocations();
+            
+            res.json({ success: true });
+        });
+    });
+});
+
+// Update NAV for a fund
+app.patch('/api/portfolio/funds/:fund_code/nav', (req, res) => {
+    const { fund_code } = req.params;
+    const { nav } = req.body;
+    
+    if (!nav || nav <= 0) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid NAV value' 
+        });
+    }
+    
+    db.serialize(() => {
+        // Update current NAV and recalculate current value
+        const updateQuery = `
+            UPDATE portfolio_funds 
+            SET current_nav = ?, 
+                current_value = units * ?, 
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE fund_code = ?
+        `;
+        
+        db.run(updateQuery, [nav, nav, fund_code], function(err) {
+            if (err) {
+                console.error(err);
+                return res.status(500).json({ success: false, message: 'Database error' });
+            }
+            
+            if (this.changes === 0) {
+                return res.status(404).json({ 
+                    success: false, 
+                    message: 'Fund not found' 
+                });
+            }
+            
+            // Add NAV history entry
+            const historyInsert = `
+                INSERT OR REPLACE INTO nav_history (fund_code, nav, nav_date) 
+                VALUES (?, ?, date('now'))
+            `;
+            db.run(historyInsert, [fund_code, nav]);
+            
+            // Recalculate allocations
+            recalculateAllocations();
+            
+            res.json({ success: true });
+        });
+    });
+});
+
+// Bulk NAV update (for scheduled updates)
+app.post('/api/portfolio/nav-update', (req, res) => {
+    const { updates } = req.body; // Array of {fund_code, nav}
+    
+    if (!Array.isArray(updates)) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Updates must be an array' 
+        });
+    }
+    
+    db.serialize(() => {
+        const stmt = db.prepare(`
+            UPDATE portfolio_funds 
+            SET current_nav = ?, 
+                current_value = units * ?, 
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE fund_code = ?
+        `);
+        
+        const historyStmt = db.prepare(`
+            INSERT OR REPLACE INTO nav_history (fund_code, nav, nav_date) 
+            VALUES (?, ?, date('now'))
+        `);
+        
+        updates.forEach(({ fund_code, nav }) => {
+            if (fund_code && nav && nav > 0) {
+                stmt.run([nav, nav, fund_code]);
+                historyStmt.run([fund_code, nav]);
+            }
+        });
+        
+        stmt.finalize();
+        historyStmt.finalize();
+        
+        // Recalculate allocations
+        recalculateAllocations();
+        
+        res.json({ success: true, updated: updates.length });
+    });
+});
+
+// Helper function to recalculate portfolio allocations
+function recalculateAllocations() {
+    db.serialize(() => {
+        // Get total portfolio value
+        db.get(`SELECT SUM(current_value) as total FROM portfolio_funds WHERE status = 'active'`, [], (err, row) => {
+            if (err || !row || !row.total) return;
+            
+            const total = row.total;
+            
+            // Update allocations
+            const updateStmt = db.prepare(`
+                UPDATE portfolio_funds 
+                SET allocation = ROUND((current_value / ?) * 100, 1) 
+                WHERE fund_code = ?
+            `);
+            
+            db.all(`SELECT fund_code, current_value FROM portfolio_funds WHERE status = 'active'`, [], (err, funds) => {
+                if (err) return;
+                
+                funds.forEach(fund => {
+                    updateStmt.run([total, fund.fund_code]);
+                });
+                
+                updateStmt.finalize();
+            });
+        });
+    });
+}
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`🚀 Portfolio API server running on port ${PORT}`);
+    console.log(`📊 Dashboard available at http://localhost:${PORT}`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    db.close((err) => {
+        if (err) {
+            console.error(err.message);
+        }
+        console.log('📦 Database connection closed.');
+        process.exit(0);
+    });
+});
