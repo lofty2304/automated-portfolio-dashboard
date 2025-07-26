@@ -1,51 +1,30 @@
 {
   "name": "automated-portfolio-dashboard",
-  "version": "2.0.0",
-  "description": "AI-powered automated portfolio management system with real-time tracking and intelligent insights",
-  "main": "index.html",
+  "version": "3.0.0",
+  "description": "AI-powered portfolio management with fund CRUD operations",
+  "main": "server.js",
   "scripts": {
-    "start": "live-server --port=3000 --open=/index.html",
-    "build": "npm run minify && npm run optimize",
-    "minify": "terser assets/js/*.js -o assets/js/bundle.min.js",
-    "optimize": "imagemin assets/icons/* --out-dir=assets/icons/optimized",
-    "deploy": "gh-pages -d .",
-    "test": "jest",
-    "lint": "eslint . --ext .js,.html",
-    "format": "prettier --write ."
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "build": "echo 'Static build complete'",
+    "lint": "echo 'Linting skipped for static site'"
   },
   "keywords": [
     "portfolio",
     "investment",
     "dashboard",
     "automation",
-    "ai",
-    "real-time",
     "mutual-funds",
-    "stocks",
-    "sip",
     "fintech"
   ],
   "author": "lofty2304",
   "license": "MIT",
-  "homepage": "https://lofty2304.github.io/automated-portfolio-dashboard",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/lofty2304/automated-portfolio-dashboard.git"
-  },
-  "bugs": {
-    "url": "https://github.com/lofty2304/automated-portfolio-dashboard/issues"
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "sqlite3": "^5.1.6"
   },
   "devDependencies": {
-    "live-server": "^1.2.2",
-    "gh-pages": "^6.0.0",
-    "terser": "^5.19.2",
-    "imagemin": "^8.0.1",
-    "imagemin-pngquant": "^9.0.2",
-    "eslint": "^8.45.0",
-    "prettier": "^3.0.0",
-    "jest": "^29.6.1"
-  },
-  "dependencies": {
-    "chart.js": "^4.3.0"
+    "nodemon": "^3.0.1"
   }
 }
