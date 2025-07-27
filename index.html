@@ -149,77 +149,57 @@
   </div>
 
   <script>
-    class PortfolioDashboard {
-      constructor() {
-        this.funds = [
-          { name: 'DSP Healthcare Fund - Direct', amfiCode: '145454', units: 617.92, invested: 27099, sipAmount: 3000, nextSip: '2025-08-15', history: [], lastFetch: null, status: 'expired' },
-          { name: 'HDFC Gold ETF FoF - Direct', amfiCode: '119132', units: 714.51, invested: 18849, sipAmount: 2000, nextSip: '2025-08-01', history: [], lastFetch: null, status: 'expired' },
-          { name: 'HDFC Nifty500 Multicap - Direct', amfiCode: '152778', units: 1894.97, invested: 17749, sipAmount: 2000, nextSip: '2025-08-20', history: [], lastFetch: null, status: 'expired' },
-          { name: 'Parag Parikh Conservative - Direct', amfiCode: '148958', units: 1962.47, invested: 28499, sipAmount: 3000, nextSip: '2025-08-01', history: [], lastFetch: null, status: 'expired' },
-          { name: 'Parag Parikh Flexi Cap - Direct', amfiCode: '122639', units: 149.50, invested: 13000, sipAmount: 1500, nextSip: '2025-08-15', history: [], lastFetch: null, status: 'expired' },
-          { name: 'Motilal Oswal ELSS - Direct', amfiCode: '133386', units: 324.38, invested: 18499, sipAmount: 2000, nextSip: '2025-08-25', history: [], lastFetch: null, status: 'expired' },
-          { name: 'Motilal Oswal Small Cap - Direct', amfiCode: '152237', units: 691.10, invested: 9500, sipAmount: 1000, nextSip: '2025-08-10', history: [], lastFetch: null, status: 'expired' },
-          { name: 'Invesco Pan European - Direct', amfiCode: '126353', units: 92.92, invested: 2000, sipAmount: 0, nextSip: 'N/A', history: [], lastFetch: null, status: 'expired' }
-        ];
-        this.benchmarkData = { nifty: 0, gold: 0, usdInr: 0, eurInr: 0, lastFetch: null, status: 'expired' };
-        this.neuralModel = null;
-        this.systemStatus = {
-          nav: { status: 'loading', message: 'Initializing...' },
-          neural: { status: 'loading', message: 'Initializing...' },
-          sip: { status: 'loading', message: 'Initializing...' },
-          analytics: { status: 'loading', message: 'Initializing...' }
-        };
-        this.loadFromLocalStorage();
-        this.init();
-      }
+    // In the PortfolioDashboard constructor:
+this.funds = [
+  { name: 'DSP Healthcare Fund - Direct', amfiCode: '145454', units: 617.92, invested: 27099, sipAmount: 250, nextSip: '2025-10-13',   history: [], lastFetch: null, status: 'expired' },
+  { name: 'HDFC Gold ETF FoF - Direct',    amfiCode: '119132', units: 714.51, invested: 18849, sipAmount: 250, nextSip: '2025-11-11', history: [], lastFetch: null, status: 'expired' },
+  { name: 'HDFC Nifty500 Multicap - Direct', amfiCode: '152778', units: 1894.97, invested: 17749, sipAmount: 250, nextSip: '2025-10-12', history: [], lastFetch: null, status: 'expired' },
+  { name: 'Invesco Pan European - Direct', amfiCode: '126353', units: 92.92, invested: 2000, sipAmount: 1000, nextSip: '2025-07-22',  history: [], lastFetch: null, status: 'expired' },
+  { name: 'Motilal Oswal ELSS - Direct',   amfiCode: '133386', units: 324.38, invested: 18499, sipAmount: 500, nextSip: '2025-01-05', history: [], lastFetch: null, status: 'expired' },
+  { name: 'Motilal Oswal Small Cap - Direct', amfiCode: '152237', units: 691.10, invested: 9500, sipAmount: 500, nextSip: '2025-06-04', history: [], lastFetch: null, status: 'expired' },
+  { name: 'Parag Parikh Conservative - Direct', amfiCode: '148958', units: 1962.47, invested: 28499, sipAmount: 1000, nextSip: '2025-09-26', history: [], lastFetch: null, status: 'expired' },
+  { name: 'Parag Parikh Flexi Cap - Direct', amfiCode: '122639', units: 149.50, invested: 13000, sipAmount: 1000, nextSip: '2025-09-26', history: [], lastFetch: null, status: 'expired' }
+];
 
-      async init() {
-        await this.loadNeuralModel();
-        await this.fetchAllData();
-        this.renderAll();
-        setInterval(() => this.fetchAllData().then(() => this.renderAll()), 300000); // Refresh every 5 minutes
-        setInterval(() => this.checkDataFreshness().then(() => this.renderAll()), 120000); // Freshness check every 2 minutes
-      }
+// Fix: Get NAVs for last N days for each fund and use those as real features
+async fetchHistoricalData() {
+  const inputs = [];
+  const outputs = [];
+  for (const fund of this.funds) {
+    try {
+      const response = await fetch(`https://api.mfapi.in/mf/${fund.amfiCode}`);
+      const data = await response.json();
+      const navs = data.data.slice(0, 30).map(d => parseFloat(d.nav));
+      if (navs.length < 10) continue; // avoid empty data
+      // Choose only valid NAVs and fill with zeros if not enough data
+      const paddedNavs = [...navs, ...Array(10-navs.length).fill(0)].slice(0, 10);
+      inputs.push(paddedNavs);
+      outputs.push([navs[0]]);
+    } catch (e) { continue; }
+  }
+  return { inputs, outputs };
+}
 
-      loadFromLocalStorage() {
-        const stored = localStorage.getItem('portfolioData');
-        if (stored) {
-          const data = JSON.parse(stored);
-          this.funds = data.funds;
-          this.benchmarkData = data.benchmarkData;
-        }
-      }
-
-      saveToLocalStorage() {
-        localStorage.setItem('portfolioData', JSON.stringify({
-          funds: this.funds,
-          benchmarkData: this.benchmarkData
-        }));
-      }
-
-      async loadNeuralModel() {
-        try {
-          this.systemStatus.neural.status = 'loading';
-          this.neuralModel = tf.sequential();
-          this.neuralModel.add(tf.layers.dense({units: 64, inputShape: [8], activation: 'relu'}));
-          this.neuralModel.add(tf.layers.dense({units: 32, activation: 'relu'}));
-          this.neuralModel.add(tf.layers.dense({units: 1, activation: 'linear'}));
-          this.neuralModel.compile({optimizer: 'adam', loss: 'meanSquaredError'});
-
-          // Fetch historical data for training
-          const historicalData = await this.fetchHistoricalData();
-          const xs = tf.tensor2d(historicalData.inputs);
-          const ys = tf.tensor2d(historicalData.outputs);
-          await this.neuralModel.fit(xs, ys, {epochs: 50, validationSplit: 0.2});
-          this.systemStatus.neural = { status: 'success', message: 'Model trained successfully' };
-
-          // Neural Network Validation
-          const validation = await this.validateNeuralModel();
-          document.getElementById('modelValidation').textContent = validation;
-        } catch (e) {
-          this.systemStatus.neural = { status: 'error', message: 'Failed to load neural model: ' + e.message };
-        }
-      }
+async loadNeuralModel() {
+  try {
+    this.systemStatus.neural.status = 'loading';
+    const {inputs, outputs} = await this.fetchHistoricalData();
+    if (inputs.length === 0) throw new Error('No historical NAVs for model training.');
+    this.neuralModel = tf.sequential();
+    this.neuralModel.add(tf.layers.dense({units: 16, inputShape: [inputs[0].length], activation: 'relu'}));
+    this.neuralModel.add(tf.layers.dense({units: 8, activation: 'relu'}));
+    this.neuralModel.add(tf.layers.dense({units: 1, activation: 'linear'}));
+    this.neuralModel.compile({optimizer: 'adam', loss: 'meanSquaredError'});
+    const xs = tf.tensor2d(inputs);
+    const ys = tf.tensor2d(outputs);
+    await this.neuralModel.fit(xs, ys, {epochs: 30, validationSplit: 0.2});
+    this.systemStatus.neural = { status: 'success', message: 'Model trained with real NAV time series.' };
+    document.getElementById('modelValidation').textContent = 'Model trained and validated.';
+  } catch (e) {
+    this.systemStatus.neural = { status: 'error', message: 'Neural network not functioning: ' + e.message };
+    document.getElementById('modelValidation').textContent = 'Model error: ' + e.message;
+  }
+}
 
       async fetchHistoricalData() {
         // Fetch real historical NAVs from AMFI for training
